@@ -5,6 +5,8 @@ export interface Video {
   filename: string;
   status: VideoStatus;
   source_path: string;
+  hls_path: string | null;
+  codec: string | null;
   duration: number | null;
   width: number | null;
   height: number | null;
@@ -36,6 +38,19 @@ export function listVideos(): Promise<Video[]> {
 
 export function getVideo(id: string): Promise<Video> {
   return request<Video>(`/api/videos/${id}`);
+}
+
+export function playbackUrl(video: Video): string | null {
+  if (video.status !== "READY" || !video.hls_path) return null;
+  return `${API_BASE}/media/${video.hls_path}`;
+}
+
+export function availableResolutions(video: Video): string[] {
+  if (!video.height) return [];
+  if (video.height >= 1080) return ["1080p", "720p", "480p"];
+  if (video.height >= 720) return ["720p", "480p"];
+  if (video.height >= 480) return ["480p"];
+  return [`${video.height}p`];
 }
 
 export async function uploadVideo(

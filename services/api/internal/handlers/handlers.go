@@ -13,18 +13,25 @@ import (
 	"github.com/google/uuid"
 	"github.com/rmarathe-hub/StreamForce/services/api/internal/config"
 	"github.com/rmarathe-hub/StreamForce/services/api/internal/models"
+	"github.com/rmarathe-hub/StreamForce/services/api/internal/processor"
 	"github.com/rmarathe-hub/StreamForce/services/api/internal/repository"
 	"github.com/rmarathe-hub/StreamForce/services/api/internal/storage"
 )
 
 type Handler struct {
-	repo    *repository.VideoRepository
-	storage *storage.LocalStorage
-	cfg     config.Config
+	repo      *repository.VideoRepository
+	storage   *storage.LocalStorage
+	processor *processor.Processor
+	cfg       config.Config
 }
 
-func New(repo *repository.VideoRepository, store *storage.LocalStorage, cfg config.Config) *Handler {
-	return &Handler{repo: repo, storage: store, cfg: cfg}
+func New(
+	repo *repository.VideoRepository,
+	store *storage.LocalStorage,
+	proc *processor.Processor,
+	cfg config.Config,
+) *Handler {
+	return &Handler{repo: repo, storage: store, processor: proc, cfg: cfg}
 }
 
 func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
@@ -101,6 +108,8 @@ func (h *Handler) CreateVideo(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to create video record")
 		return
 	}
+
+	h.processor.Enqueue(video.ID)
 
 	writeJSON(w, http.StatusCreated, video)
 }

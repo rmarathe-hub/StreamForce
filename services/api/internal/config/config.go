@@ -6,11 +6,13 @@ import (
 )
 
 type Config struct {
-	Port         string
-	DatabaseURL  string
-	StoragePath  string
-	MaxUploadMB  int64
+	Port           string
+	DatabaseURL    string
+	StoragePath    string
+	MaxUploadMB    int64
 	MigrationsPath string
+	FFmpegPath     string
+	FFprobePath    string
 }
 
 func Load() Config {
@@ -27,11 +29,13 @@ func Load() Config {
 	}
 
 	return Config{
-		Port:         getEnv("PORT", "8081"),
-		DatabaseURL:  getEnv("DATABASE_URL", "postgres://streamforge:streamforge@localhost:15433/streamforge?sslmode=disable"),
-		StoragePath:  getEnv("STORAGE_PATH", "../../storage"),
-		MaxUploadMB:  maxUploadMB,
+		Port:           getEnv("PORT", "8081"),
+		DatabaseURL:    getEnv("DATABASE_URL", "postgres://streamforge:streamforge@localhost:15433/streamforge?sslmode=disable"),
+		StoragePath:    getEnv("STORAGE_PATH", "../../storage"),
+		MaxUploadMB:    maxUploadMB,
 		MigrationsPath: migrationsPath,
+		FFmpegPath:     getEnv("FFMPEG_PATH", "ffmpeg"),
+		FFprobePath:    getEnv("FFPROBE_PATH", "ffprobe"),
 	}
 }
 

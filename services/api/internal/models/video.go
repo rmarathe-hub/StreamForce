@@ -18,6 +18,8 @@ type Video struct {
 	Filename     string    `json:"filename"`
 	Status       string    `json:"status"`
 	SourcePath   string    `json:"source_path"`
+	HLSPath      *string   `json:"hls_path"`
+	Codec        *string   `json:"codec"`
 	Duration     *float64  `json:"duration"`
 	Width        *int      `json:"width"`
 	Height       *int      `json:"height"`

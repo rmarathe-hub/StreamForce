@@ -18,12 +18,16 @@ func NewVideoRepository(pool *pgxpool.Pool) *VideoRepository {
 	return &VideoRepository{pool: pool}
 }
 
+const videoColumns = `
+	id, filename, status, source_path, hls_path, codec,
+	duration, width, height, created_at, updated_at, error_message
+`
+
 func (r *VideoRepository) Create(ctx context.Context, video models.Video) (models.Video, error) {
 	const query = `
 		INSERT INTO videos (filename, status, source_path)
 		VALUES ($1, $2, $3)
-		RETURNING id, filename, status, source_path, duration, width, height, created_at, updated_at, error_message
-	`
+		RETURNING ` + videoColumns
 
 	row := r.pool.QueryRow(ctx, query, video.Filename, video.Status, video.SourcePath)
 	return scanVideo(row)
@@ -31,7 +35,7 @@ func (r *VideoRepository) Create(ctx context.Context, video models.Video) (model
 
 func (r *VideoRepository) List(ctx context.Context) ([]models.Video, error) {
 	const query = `
-		SELECT id, filename, status, source_path, duration, width, height, created_at, updated_at, error_message
+		SELECT ` + videoColumns + `
 		FROM videos
 		ORDER BY created_at DESC
 	`
@@ -60,7 +64,7 @@ func (r *VideoRepository) List(ctx context.Context) ([]models.Video, error) {
 
 func (r *VideoRepository) GetByID(ctx context.Context, id uuid.UUID) (models.Video, error) {
 	const query = `
-		SELECT id, filename, status, source_path, duration, width, height, created_at, updated_at, error_message
+		SELECT ` + videoColumns + `
 		FROM videos
 		WHERE id = $1
 	`
@@ -77,6 +81,80 @@ func (r *VideoRepository) GetByID(ctx context.Context, id uuid.UUID) (models.Vid
 	return video, nil
 }
 
+func (r *VideoRepository) ListByStatus(ctx context.Context, status string) ([]models.Video, error) {
+	const query = `
+		SELECT ` + videoColumns + `
+		FROM videos
+		WHERE status = $1
+		ORDER BY created_at ASC
+	`
+
+	rows, err := r.pool.Query(ctx, query, status)
+	if err != nil {
+		return nil, fmt.Errorf("list videos by status: %w", err)
+	}
+	defer rows.Close()
+
+	var videos []models.Video
+	for rows.Next() {
+		video, err := scanVideo(rows)
+		if err != nil {
+			return nil, err
+		}
+		videos = append(videos, video)
+	}
+
+	if videos == nil {
+		videos = []models.Video{}
+	}
+
+	return videos, rows.Err()
+}
+
+func (r *VideoRepository) MarkProcessing(ctx context.Context, id uuid.UUID) error {
+	const query = `
+		UPDATE videos
+		SET status = $2, updated_at = NOW(), error_message = NULL
+		WHERE id = $1
+	`
+	_, err := r.pool.Exec(ctx, query, id, models.StatusProcessing)
+	return err
+}
+
+func (r *VideoRepository) MarkReady(
+	ctx context.Context,
+	id uuid.UUID,
+	hlsPath string,
+	duration float64,
+	width, height int,
+	codec string,
+) error {
+	const query = `
+		UPDATE videos
+		SET status = $2,
+		    hls_path = $3,
+		    duration = $4,
+		    width = $5,
+		    height = $6,
+		    codec = $7,
+		    updated_at = NOW(),
+		    error_message = NULL
+		WHERE id = $1
+	`
+	_, err := r.pool.Exec(ctx, query, id, models.StatusReady, hlsPath, duration, width, height, codec)
+	return err
+}
+
+func (r *VideoRepository) MarkFailed(ctx context.Context, id uuid.UUID, message string) error {
+	const query = `
+		UPDATE videos
+		SET status = $2, error_message = $3, updated_at = NOW()
+		WHERE id = $1
+	`
+	_, err := r.pool.Exec(ctx, query, id, models.StatusFailed, message)
+	return err
+}
+
 var ErrNotFound = fmt.Errorf("video not found")
 
 type scannable interface {
@@ -90,6 +168,8 @@ func scanVideo(row scannable) (models.Video, error) {
 		&video.Filename,
 		&video.Status,
 		&video.SourcePath,
+		&video.HLSPath,
+		&video.Codec,
 		&video.Duration,
 		&video.Width,
 		&video.Height,

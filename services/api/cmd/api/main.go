@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/rmarathe-hub/StreamForce/services/api/internal/config"
 	"github.com/rmarathe-hub/StreamForce/services/api/internal/database"
 	"github.com/rmarathe-hub/StreamForce/services/api/internal/handlers"
+	"github.com/rmarathe-hub/StreamForce/services/api/internal/processor"
 	"github.com/rmarathe-hub/StreamForce/services/api/internal/repository"
 	"github.com/rmarathe-hub/StreamForce/services/api/internal/storage"
 )
@@ -39,7 +41,12 @@ func main() {
 	}
 
 	repo := repository.NewVideoRepository(pool)
-	h := handlers.New(repo, store, cfg)
+	proc := processor.New(repo, cfg)
+	if err := proc.RecoverPending(ctx); err != nil {
+		log.Printf("pending video recovery failed: %v", err)
+	}
+
+	h := handlers.New(repo, store, proc, cfg)
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
@@ -56,6 +63,7 @@ func main() {
 	}))
 
 	r.Get("/health", h.Health)
+	r.Handle("/media/*", mediaHandler(cfg.StoragePath))
 	r.Route("/api", func(r chi.Router) {
 		r.Get("/videos", h.ListVideos)
 		r.Post("/videos", h.CreateVideo)
@@ -88,4 +96,14 @@ func main() {
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Fatalf("server shutdown failed: %v", err)
 	}
+}
+
+func mediaHandler(storagePath string) http.Handler {
+	absPath, err := filepath.Abs(storagePath)
+	if err != nil {
+		log.Fatalf("resolve storage path: %v", err)
+	}
+
+	fileServer := http.FileServer(http.Dir(absPath))
+	return http.StripPrefix("/media/", fileServer)
 }

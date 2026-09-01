@@ -49,8 +49,8 @@ export default function UploadPage() {
       <div>
         <h1 className="text-3xl font-bold text-white">Upload video</h1>
         <p className="mt-2 text-zinc-400">
-          Drag an MP4 into the browser. The file is saved locally and recorded in
-          PostgreSQL.
+          Drag an MP4 into the browser. FFmpeg will transcode it into adaptive HLS
+          renditions after upload.
         </p>
       </div>
 

@@ -5,14 +5,14 @@ export default function HomePage() {
     <section className="space-y-8">
       <div className="space-y-3">
         <p className="text-sm font-medium uppercase tracking-widest text-accent">
-          Phase 1
+          StreamForge
         </p>
         <h1 className="text-4xl font-bold tracking-tight text-white">
-          Upload. Store. Track.
+          Upload. Transcode. Stream.
         </h1>
         <p className="max-w-2xl text-lg text-zinc-400">
-          StreamForge accepts video uploads, persists metadata in PostgreSQL, and
-          stores files locally. Processing and HLS come in later phases.
+          Upload an MP4, let FFmpeg generate adaptive HLS renditions, and play
+          the stream directly in your browser.
         </p>
       </div>
 

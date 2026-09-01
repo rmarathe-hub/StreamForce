@@ -72,6 +72,7 @@ export default function VideosPage() {
               <tr>
                 <th className="px-4 py-3 font-medium">Filename</th>
                 <th className="px-4 py-3 font-medium">Status</th>
+                <th className="px-4 py-3 font-medium">Duration</th>
                 <th className="px-4 py-3 font-medium">Created</th>
                 <th className="px-4 py-3 font-medium" />
               </tr>
@@ -82,6 +83,9 @@ export default function VideosPage() {
                   <td className="px-4 py-3 font-medium text-white">{video.filename}</td>
                   <td className="px-4 py-3">
                     <StatusBadge status={video.status} />
+                  </td>
+                  <td className="px-4 py-3 text-zinc-400">
+                    {video.duration ? `${video.duration.toFixed(1)}s` : "—"}
                   </td>
                   <td className="px-4 py-3 text-zinc-400">{formatDate(video.created_at)}</td>
                   <td className="px-4 py-3 text-right">

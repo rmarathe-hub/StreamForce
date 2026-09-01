@@ -3,7 +3,13 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { getVideo, type Video } from "@/lib/api";
+import { HLSPlayer } from "@/components/hls-player";
+import {
+  availableResolutions,
+  getVideo,
+  playbackUrl,
+  type Video,
+} from "@/lib/api";
 import { StatusBadge, formatDate } from "@/components/status-badge";
 
 function DetailRow({ label, value }: { label: string; value: string }) {
@@ -15,6 +21,21 @@ function DetailRow({ label, value }: { label: string; value: string }) {
   );
 }
 
+function statusMessage(status: Video["status"]): string {
+  switch (status) {
+    case "UPLOADED":
+      return "Upload complete. Transcoding will start shortly.";
+    case "PROCESSING":
+      return "FFmpeg is generating adaptive HLS renditions.";
+    case "READY":
+      return "Adaptive HLS stream is ready to play.";
+    case "FAILED":
+      return "Processing failed. Check the error details below.";
+    default:
+      return "";
+  }
+}
+
 export default function VideoDetailPage() {
   const params = useParams<{ id: string }>();
   const [video, setVideo] = useState<Video | null>(null);
@@ -23,11 +44,29 @@ export default function VideoDetailPage() {
 
   useEffect(() => {
     let active = true;
+    let interval: ReturnType<typeof setInterval> | undefined;
 
     async function load() {
       try {
         const data = await getVideo(params.id);
-        if (active) setVideo(data);
+        if (!active) return;
+        setVideo(data);
+        setError(null);
+
+        if (data.status === "UPLOADED" || data.status === "PROCESSING") {
+          interval = setInterval(async () => {
+            try {
+              const updated = await getVideo(params.id);
+              if (!active) return;
+              setVideo(updated);
+              if (updated.status === "READY" || updated.status === "FAILED") {
+                clearInterval(interval);
+              }
+            } catch {
+              // keep polling on transient errors
+            }
+          }, 2000);
+        }
       } catch (err) {
         if (active) {
           setError(err instanceof Error ? err.message : "Failed to load video");
@@ -38,8 +77,10 @@ export default function VideoDetailPage() {
     }
 
     if (params.id) load();
+
     return () => {
       active = false;
+      if (interval) clearInterval(interval);
     };
   }, [params.id]);
 
@@ -60,6 +101,9 @@ export default function VideoDetailPage() {
     );
   }
 
+  const streamUrl = playbackUrl(video);
+  const resolutions = availableResolutions(video);
+
   return (
     <section className="space-y-6">
       <div className="flex items-start justify-between gap-4">
@@ -75,17 +119,30 @@ export default function VideoDetailPage() {
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[2fr_1fr]">
-        <div className="rounded-xl border border-surface-border bg-surface-raised p-6">
-          <h2 className="text-lg font-semibold text-white">Processing status</h2>
-          <p className="mt-2 text-sm text-zinc-400">
-            Phase 1 stores the upload and marks it as <span className="text-zinc-200">UPLOADED</span>.
-            FFmpeg transcoding and HLS playback arrive in Phase 2.
-          </p>
-          {video.status === "UPLOADED" && (
-            <p className="mt-4 rounded-lg border border-sky-500/20 bg-sky-500/10 px-4 py-3 text-sm text-sky-200">
-              File saved successfully. Waiting for processing pipeline.
-            </p>
+        <div className="space-y-4">
+          {streamUrl ? (
+            <div className="overflow-hidden rounded-xl border border-surface-border bg-black">
+              <HLSPlayer src={streamUrl} />
+            </div>
+          ) : (
+            <div className="flex aspect-video items-center justify-center rounded-xl border border-dashed border-surface-border bg-surface-raised">
+              <p className="text-sm text-zinc-400">
+                {video.status === "PROCESSING" || video.status === "UPLOADED"
+                  ? "Preparing HLS stream..."
+                  : "Playback unavailable"}
+              </p>
+            </div>
           )}
+
+          <div className="rounded-xl border border-surface-border bg-surface-raised p-6">
+            <h2 className="text-lg font-semibold text-white">Processing status</h2>
+            <p className="mt-2 text-sm text-zinc-400">{statusMessage(video.status)}</p>
+            {(video.status === "UPLOADED" || video.status === "PROCESSING") && (
+              <p className="mt-4 animate-pulse text-sm text-amber-300">
+                Refreshing automatically every 2 seconds...
+              </p>
+            )}
+          </div>
         </div>
 
         <dl className="rounded-xl border border-surface-border bg-surface-raised p-6">
@@ -93,13 +150,20 @@ export default function VideoDetailPage() {
           <DetailRow label="Video ID" value={video.id} />
           <DetailRow label="Filename" value={video.filename} />
           <DetailRow label="Status" value={video.status} />
-          <DetailRow label="Storage path" value={video.source_path} />
-          <DetailRow label="Duration" value={video.duration ? `${video.duration}s` : "—"} />
+          <DetailRow label="Codec" value={video.codec ?? "—"} />
           <DetailRow
-            label="Resolution"
+            label="Source resolution"
             value={
               video.width && video.height ? `${video.width}×${video.height}` : "—"
             }
+          />
+          <DetailRow
+            label="HLS renditions"
+            value={resolutions.length > 0 ? resolutions.join(", ") : "—"}
+          />
+          <DetailRow
+            label="Duration"
+            value={video.duration ? `${video.duration.toFixed(1)}s` : "—"}
           />
           <DetailRow label="Created" value={formatDate(video.created_at)} />
           <DetailRow label="Updated" value={formatDate(video.updated_at)} />
