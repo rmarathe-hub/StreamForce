@@ -29,6 +29,10 @@ func New(repo *repository.VideoRepository, cfg Config) *Processor {
 }
 
 func (p *Processor) Process(ctx context.Context, video models.Video) error {
+	if video.Status == models.StatusReady {
+		return nil
+	}
+
 	if video.Status != models.StatusProcessing {
 		return fmt.Errorf("video %s is not processing", video.ID)
 	}

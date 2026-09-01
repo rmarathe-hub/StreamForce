@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,14 +18,24 @@ import (
 	"github.com/rmarathe-hub/StreamForce/shared/repository"
 )
 
-type Handler struct {
-	repo    *repository.VideoRepository
-	storage *storage.LocalStorage
-	cfg     config.Config
+type JobPublisher interface {
+	PublishVideoJob(ctx context.Context, videoID uuid.UUID, sourcePath string, attempt int) error
 }
 
-func New(repo *repository.VideoRepository, store *storage.LocalStorage, cfg config.Config) *Handler {
-	return &Handler{repo: repo, storage: store, cfg: cfg}
+type Handler struct {
+	repo      *repository.VideoRepository
+	storage   *storage.LocalStorage
+	publisher JobPublisher
+	cfg       config.Config
+}
+
+func New(
+	repo *repository.VideoRepository,
+	store *storage.LocalStorage,
+	publisher JobPublisher,
+	cfg config.Config,
+) *Handler {
+	return &Handler{repo: repo, storage: store, publisher: publisher, cfg: cfg}
 }
 
 func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
@@ -94,11 +105,17 @@ func (h *Handler) CreateVideo(w http.ResponseWriter, r *http.Request) {
 
 	video, err := h.repo.Create(r.Context(), models.Video{
 		Filename:   filename,
-		Status:     models.StatusUploaded,
+		Status:     models.StatusQueued,
 		SourcePath: sourcePath,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create video record")
+		return
+	}
+
+	if err := h.publisher.PublishVideoJob(r.Context(), video.ID, video.SourcePath, 1); err != nil {
+		_ = h.repo.MarkFailed(r.Context(), video.ID, "failed to publish kafka job: "+err.Error())
+		writeError(w, http.StatusInternalServerError, "failed to queue video for processing")
 		return
 	}
 

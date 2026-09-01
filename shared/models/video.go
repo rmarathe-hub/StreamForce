@@ -8,6 +8,7 @@ import (
 
 const (
 	StatusUploaded   = "UPLOADED"
+	StatusQueued     = "QUEUED"
 	StatusProcessing = "PROCESSING"
 	StatusReady      = "READY"
 	StatusFailed     = "FAILED"

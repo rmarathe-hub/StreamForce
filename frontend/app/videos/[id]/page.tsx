@@ -24,7 +24,9 @@ function DetailRow({ label, value }: { label: string; value: string }) {
 function statusMessage(status: Video["status"]): string {
   switch (status) {
     case "UPLOADED":
-      return "Upload complete. Waiting for a worker to pick up this job.";
+      return "Upload complete. Waiting to be queued.";
+    case "QUEUED":
+      return "Queued in Kafka. Waiting for a worker to consume the job.";
     case "PROCESSING":
       return "A background worker is generating adaptive HLS renditions.";
     case "READY":
@@ -53,7 +55,7 @@ export default function VideoDetailPage() {
         setVideo(data);
         setError(null);
 
-        if (data.status === "UPLOADED" || data.status === "PROCESSING") {
+        if (data.status === "UPLOADED" || data.status === "QUEUED" || data.status === "PROCESSING") {
           interval = setInterval(async () => {
             try {
               const updated = await getVideo(params.id);
@@ -127,7 +129,7 @@ export default function VideoDetailPage() {
           ) : (
             <div className="flex aspect-video items-center justify-center rounded-xl border border-dashed border-surface-border bg-surface-raised">
               <p className="text-sm text-zinc-400">
-                {video.status === "PROCESSING" || video.status === "UPLOADED"
+                {video.status === "QUEUED" || video.status === "PROCESSING" || video.status === "UPLOADED"
                   ? "Preparing HLS stream..."
                   : "Playback unavailable"}
               </p>
@@ -137,7 +139,7 @@ export default function VideoDetailPage() {
           <div className="rounded-xl border border-surface-border bg-surface-raised p-6">
             <h2 className="text-lg font-semibold text-white">Processing status</h2>
             <p className="mt-2 text-sm text-zinc-400">{statusMessage(video.status)}</p>
-            {(video.status === "UPLOADED" || video.status === "PROCESSING") && (
+            {(video.status === "UPLOADED" || video.status === "QUEUED" || video.status === "PROCESSING") && (
               <p className="mt-4 animate-pulse text-sm text-amber-300">
                 Refreshing automatically every 2 seconds...
               </p>

@@ -17,6 +17,7 @@ import (
 	"github.com/rmarathe-hub/StreamForce/services/api/internal/handlers"
 	"github.com/rmarathe-hub/StreamForce/services/api/internal/storage"
 	"github.com/rmarathe-hub/StreamForce/shared/database"
+	"github.com/rmarathe-hub/StreamForce/shared/kafka"
 	"github.com/rmarathe-hub/StreamForce/shared/repository"
 )
 
@@ -34,13 +35,23 @@ func main() {
 		log.Fatalf("migrations failed: %v", err)
 	}
 
+	brokers := kafka.ParseBrokers(cfg.KafkaBrokers)
+	if err := kafka.EnsureTopic(ctx, brokers, cfg.KafkaTopic); err != nil {
+		log.Fatalf("kafka topic setup failed: %v", err)
+	}
+
+	producer := kafka.NewProducer(brokers, cfg.KafkaTopic)
+	defer producer.Close()
+
+	publisher := kafka.NewJobPublisher(producer)
+
 	store, err := storage.NewLocalStorage(cfg.StoragePath)
 	if err != nil {
 		log.Fatalf("storage init failed: %v", err)
 	}
 
 	repo := repository.NewVideoRepository(pool)
-	h := handlers.New(repo, store, cfg)
+	h := handlers.New(repo, store, publisher, cfg)
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)

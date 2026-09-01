@@ -2,14 +2,15 @@
 
 Distributed video-processing and streaming platform (portfolio project).
 
-Upload videos via the API, transcode them into adaptive HLS in a separate worker process, and play streams in the browser.
+Upload videos via the API, queue transcoding jobs in Kafka, process them in a separate worker, and play adaptive HLS in the browser.
 
 ## Stack
 
 - **Frontend:** Next.js 15, TypeScript, Tailwind CSS, hls.js
-- **API:** Go, chi router, pgx
-- **Worker:** Go, FFmpeg, ffprobe
+- **API:** Go, chi router, pgx, Kafka producer
+- **Worker:** Go, Kafka consumer, FFmpeg, ffprobe
 - **Database:** PostgreSQL 16
+- **Messaging:** Apache Kafka (KRaft, local Docker)
 - **Storage:** Local filesystem (`storage/uploads/`, `storage/hls/`)
 
 ## Prerequisites
@@ -21,11 +22,13 @@ Upload videos via the API, transcode them into adaptive HLS in a separate worker
 
 ## Quick start
 
-### 1. Start PostgreSQL
+### 1. Start infrastructure
 
 ```bash
 docker compose up -d
 ```
+
+Starts PostgreSQL (`15433`) and Kafka (`29092`).
 
 ### 2. Start the API
 
@@ -34,7 +37,7 @@ cd services/api
 go run ./cmd/api
 ```
 
-The API runs at `http://localhost:8081` and applies migrations on startup.
+The API runs at `http://localhost:8081`, applies migrations, and ensures the `video.jobs` Kafka topic exists.
 
 ### 3. Start the worker
 
@@ -46,7 +49,7 @@ cd services/worker
 go run ./cmd/worker
 ```
 
-The worker polls PostgreSQL for `UPLOADED` videos and runs FFmpeg independently of the API.
+The worker consumes from Kafka topic `video.jobs` and runs FFmpeg.
 
 ### 4. Start the frontend
 
@@ -57,38 +60,42 @@ cd frontend
 npm run dev
 ```
 
-Open `http://localhost:3000`, upload an MP4, and open the video detail page to watch the HLS stream once status is `READY`.
+Open `http://localhost:3000`, upload an MP4, and watch status move `QUEUED` → `PROCESSING` → `READY`.
 
-> **Note:** Defaults use port `8081` for the API and `15433` for PostgreSQL to avoid common local conflicts. Override with `PORT`, `DATABASE_URL`, and `NEXT_PUBLIC_API_URL` if needed.
-
-## Architecture (Phase 3)
+## Architecture
 
 ```
 Frontend
    ↓
-Go API  →  saves upload + marks UPLOADED
+Go API  →  save upload + QUEUED in Postgres
+        →  publish video.jobs to Kafka
    ↓
-PostgreSQL  ←→  Go Worker  →  FFmpeg  →  HLS files
+Kafka topic: video.jobs
+   ↓
+Go Worker  →  consume job  →  FFmpeg  →  HLS files
+   ↓
+PostgreSQL + shared storage
    ↑
 Go API serves /media/*
 ```
 
-The API and worker are separate processes sharing PostgreSQL and the `storage/` directory. If the worker is stopped, uploads still succeed and remain `UPLOADED` until the worker restarts.
+**Phase 4 demo:** stop the worker, upload videos (they stay `QUEUED` in Kafka), then start the worker and watch them process.
 
 ## Processing flow
 
 ```
-Upload → UPLOADED → (worker claims job) → PROCESSING → FFmpeg/ffprobe → READY
+Upload → QUEUED → (Kafka) → PROCESSING → FFmpeg/ffprobe → READY
 ```
 
-HLS output:
+## Kafka message (`video.jobs`)
 
-```
-storage/hls/{videoId}/
-├── 1080p/index.m3u8 + segments
-├── 720p/index.m3u8 + segments
-├── 480p/index.m3u8 + segments
-└── master.m3u8
+```json
+{
+  "eventId": "uuid",
+  "videoId": "uuid",
+  "sourcePath": "uploads/....mp4",
+  "attempt": 1
+}
 ```
 
 ## API endpoints
@@ -97,18 +104,25 @@ storage/hls/{videoId}/
 |--------|------|-------------|
 | `GET` | `/health` | Health check |
 | `GET` | `/api/videos` | List all videos |
-| `POST` | `/api/videos` | Upload video (`multipart/form-data`, field: `file`) |
+| `POST` | `/api/videos` | Upload video |
 | `GET` | `/api/videos/{id}` | Get video by ID |
-| `GET` | `/media/*` | Serve uploaded files and HLS output |
+| `GET` | `/media/*` | Serve uploads and HLS output |
 
 ## Environment variables
+
+### Shared Kafka settings
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `KAFKA_BROKERS` | `localhost:29092` | Comma-separated broker list |
+| `KAFKA_TOPIC` | `video.jobs` | Video processing topic |
 
 ### API (`services/api`)
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PORT` | `8081` | HTTP port |
-| `DATABASE_URL` | `postgres://streamforge:streamforge@localhost:15433/streamforge?sslmode=disable` | PostgreSQL connection string |
+| `DATABASE_URL` | postgres on `15433` | PostgreSQL connection string |
 | `STORAGE_PATH` | `../../storage` | Local video storage root |
 | `MIGRATIONS_PATH` | `../../migrations` | SQL migrations directory |
 | `MAX_UPLOAD_MB` | `500` | Max upload size in MB |
@@ -122,7 +136,7 @@ storage/hls/{videoId}/
 | `FFMPEG_PATH` | `ffmpeg` | FFmpeg binary |
 | `FFPROBE_PATH` | `ffprobe` | ffprobe binary |
 | `WORKER_ID` | hostname | Log identifier |
-| `WORKER_POLL_SECONDS` | `2` | Idle poll interval |
+| `KAFKA_CONSUMER_GROUP` | `streamforge-workers` | Kafka consumer group |
 
 ### Frontend (`frontend`)
 
@@ -135,10 +149,10 @@ storage/hls/{videoId}/
 ```
 streamforge/
 ├── frontend/
-├── shared/             # models, repository, processor, database
+├── shared/             # models, repository, processor, kafka
 ├── services/
-│   ├── api/            # HTTP API only
-│   └── worker/         # FFmpeg worker
+│   ├── api/            # HTTP API + Kafka producer
+│   └── worker/         # Kafka consumer + FFmpeg
 ├── migrations/
 ├── storage/
 └── docker-compose.yml
@@ -146,6 +160,6 @@ streamforge/
 
 ## Next steps
 
-- Kafka job queue (replace DB polling)
+- Multiple Kafka workers (consumer group scaling)
 - Redis progress, WebSockets
-- Docker Compose, Kubernetes, k6 benchmarks
+- Docker Compose for full app stack, Kubernetes, k6 benchmarks

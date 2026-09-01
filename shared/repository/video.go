@@ -129,13 +129,23 @@ func (r *VideoRepository) ClaimNextUploaded(ctx context.Context) (models.Video, 
 	return video, nil
 }
 
+func (r *VideoRepository) MarkProcessing(ctx context.Context, id uuid.UUID) error {
+	const query = `
+		UPDATE videos
+		SET status = $2, updated_at = NOW(), error_message = NULL
+		WHERE id = $1
+	`
+	_, err := r.pool.Exec(ctx, query, id, models.StatusProcessing)
+	return err
+}
+
 func (r *VideoRepository) ResetInterruptedProcessing(ctx context.Context) (int64, error) {
 	const query = `
 		UPDATE videos
 		SET status = $1, updated_at = NOW()
 		WHERE status = $2
 	`
-	tag, err := r.pool.Exec(ctx, query, models.StatusUploaded, models.StatusProcessing)
+	tag, err := r.pool.Exec(ctx, query, models.StatusQueued, models.StatusProcessing)
 	if err != nil {
 		return 0, err
 	}

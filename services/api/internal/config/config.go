@@ -11,6 +11,8 @@ type Config struct {
 	StoragePath    string
 	MaxUploadMB    int64
 	MigrationsPath string
+	KafkaBrokers   string
+	KafkaTopic     string
 }
 
 func Load() Config {
@@ -32,6 +34,8 @@ func Load() Config {
 		StoragePath:    getEnv("STORAGE_PATH", "../../storage"),
 		MaxUploadMB:    maxUploadMB,
 		MigrationsPath: migrationsPath,
+		KafkaBrokers:   getEnv("KAFKA_BROKERS", "localhost:29092"),
+		KafkaTopic:     getEnv("KAFKA_TOPIC", "video.jobs"),
 	}
 }
 

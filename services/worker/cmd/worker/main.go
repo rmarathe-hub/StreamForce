@@ -9,6 +9,7 @@ import (
 
 	"github.com/rmarathe-hub/StreamForce/services/worker/internal/config"
 	"github.com/rmarathe-hub/StreamForce/shared/database"
+	"github.com/rmarathe-hub/StreamForce/shared/kafka"
 	"github.com/rmarathe-hub/StreamForce/shared/processor"
 	"github.com/rmarathe-hub/StreamForce/shared/repository"
 )
@@ -41,7 +42,15 @@ func main() {
 		FFprobePath: cfg.FFprobePath,
 	})
 
-	runner := processor.NewRunner(repo, proc, cfg.WorkerID, cfg.PollInterval)
+	brokers := kafka.ParseBrokers(cfg.KafkaBrokers)
+	consumer := kafka.NewConsumer(kafka.Config{
+		Brokers: brokers,
+		Topic:   cfg.KafkaTopic,
+		GroupID: cfg.KafkaConsumerGroup,
+	})
+	defer consumer.Close()
+
+	runner := processor.NewKafkaRunner(consumer, repo, proc, cfg.WorkerID)
 	if err := runner.Run(ctx); err != nil && err != context.Canceled {
 		log.Fatalf("worker failed: %v", err)
 	}

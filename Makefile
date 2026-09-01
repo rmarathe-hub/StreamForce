@@ -16,7 +16,7 @@ frontend:
 	cd frontend && npm run dev
 
 dev:
-	@echo "Start PostgreSQL: make db-up"
-	@echo "Start API:        make api"
-	@echo "Start worker:     make worker"
-	@echo "Start frontend:   make frontend"
+	@echo "Start infrastructure: make db-up"
+	@echo "Start API:            make api"
+	@echo "Start worker:         make worker"
+	@echo "Start frontend:       make frontend"
