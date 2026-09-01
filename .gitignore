@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+frontend/.next/
+frontend/out/
+
+# Go
+services/api/bin/
+*.exe
+*.test
+
+# Local storage
+storage/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Logs
+*.log

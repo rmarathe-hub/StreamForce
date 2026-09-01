@@ -1,0 +1,27 @@
+package models
+
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
+
+const (
+	StatusUploaded   = "UPLOADED"
+	StatusProcessing = "PROCESSING"
+	StatusReady      = "READY"
+	StatusFailed     = "FAILED"
+)
+
+type Video struct {
+	ID           uuid.UUID `json:"id"`
+	Filename     string    `json:"filename"`
+	Status       string    `json:"status"`
+	SourcePath   string    `json:"source_path"`
+	Duration     *float64  `json:"duration"`
+	Width        *int      `json:"width"`
+	Height       *int      `json:"height"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+	ErrorMessage *string   `json:"error_message"`
+}
