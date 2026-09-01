@@ -81,6 +81,29 @@ Go API serves /media/*
 
 **Phase 4 demo:** stop the worker, upload videos (they stay `QUEUED` in Kafka), then start the worker and watch them process.
 
+**Phase 5 demo:** run multiple workers in the same consumer group (`streamforge-workers`). Kafka distributes partitions across workers so different videos transcode in parallel (up to 3 workers with the default 3-partition topic).
+
+## Multiple workers (Phase 5)
+
+Start up to **3 workers** in separate terminals (one consumer per Kafka partition):
+
+```bash
+export PATH="/opt/homebrew/bin:$PATH"
+
+# Terminal A
+make worker-1
+
+# Terminal B
+make worker-2
+
+# Terminal C
+make worker-3
+```
+
+Each worker gets a distinct `WORKER_ID` (`worker-1`, `worker-2`, …). Upload several videos at once and check worker logs — you should see different `worker_id` values handling different jobs.
+
+Jobs are claimed atomically in Postgres (`claimed_by`, `claimed_at`) so two workers never process the same video. If a worker dies mid-transcode, the claim expires after 10 minutes and another worker can reclaim the job.
+
 ## Processing flow
 
 ```
@@ -160,6 +183,5 @@ streamforge/
 
 ## Next steps
 
-- Multiple Kafka workers (consumer group scaling)
 - Redis progress, WebSockets
 - Docker Compose for full app stack, Kubernetes, k6 benchmarks

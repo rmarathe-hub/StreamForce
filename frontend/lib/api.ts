@@ -10,6 +10,7 @@ export interface Video {
   duration: number | null;
   width: number | null;
   height: number | null;
+  claimed_by: string | null;
   created_at: string;
   updated_at: string;
   error_message: string | null;

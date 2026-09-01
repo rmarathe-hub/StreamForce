@@ -28,14 +28,6 @@ func main() {
 
 	repo := repository.NewVideoRepository(pool)
 
-	reset, err := repo.ResetInterruptedProcessing(ctx)
-	if err != nil {
-		log.Fatalf("reset interrupted processing jobs failed: %v", err)
-	}
-	if reset > 0 {
-		log.Printf(`{"worker_id":"%s","event":"recovered_interrupted_jobs","count":%d}`, cfg.WorkerID, reset)
-	}
-
 	proc := processor.New(repo, processor.Config{
 		StoragePath: cfg.StoragePath,
 		FFmpegPath:  cfg.FFmpegPath,
@@ -50,7 +42,7 @@ func main() {
 	})
 	defer consumer.Close()
 
-	runner := processor.NewKafkaRunner(consumer, repo, proc, cfg.WorkerID)
+	runner := processor.NewKafkaRunner(consumer, repo, proc, cfg.WorkerID, cfg.KafkaConsumerGroup)
 	if err := runner.Run(ctx); err != nil && err != context.Canceled {
 		log.Fatalf("worker failed: %v", err)
 	}

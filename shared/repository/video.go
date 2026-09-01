@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -12,8 +13,9 @@ import (
 )
 
 var (
-	ErrNotFound = fmt.Errorf("video not found")
-	ErrNoJob    = errors.New("no uploaded videos to process")
+	ErrNotFound     = fmt.Errorf("video not found")
+	ErrNoJob        = errors.New("no uploaded videos to process")
+	ErrNotClaimable = errors.New("video is being processed by another worker")
 )
 
 type VideoRepository struct {
@@ -26,7 +28,8 @@ func NewVideoRepository(pool *pgxpool.Pool) *VideoRepository {
 
 const videoColumns = `
 	id, filename, status, source_path, hls_path, codec,
-	duration, width, height, created_at, updated_at, error_message
+	duration, width, height, claimed_by, claimed_at,
+	created_at, updated_at, error_message
 `
 
 func (r *VideoRepository) Create(ctx context.Context, video models.Video) (models.Video, error) {
@@ -129,6 +132,67 @@ func (r *VideoRepository) ClaimNextUploaded(ctx context.Context) (models.Video, 
 	return video, nil
 }
 
+func (r *VideoRepository) TryClaimForProcessing(
+	ctx context.Context,
+	id uuid.UUID,
+	workerID string,
+	staleAfter time.Duration,
+) (models.Video, error) {
+	const query = `
+		UPDATE videos
+		SET status = $3,
+		    claimed_by = $2,
+		    claimed_at = NOW(),
+		    updated_at = NOW(),
+		    error_message = NULL
+		WHERE id = $1
+		  AND (
+		    status IN ($4, $5, $6)
+		    OR (status = $3 AND (claimed_at IS NULL OR claimed_at < NOW() - ($7 * INTERVAL '1 second')))
+		    OR (status = $3 AND claimed_by = $2)
+		  )
+		RETURNING ` + videoColumns
+
+	row := r.pool.QueryRow(
+		ctx,
+		query,
+		id,
+		workerID,
+		models.StatusProcessing,
+		models.StatusQueued,
+		models.StatusFailed,
+		models.StatusUploaded,
+		int(staleAfter.Seconds()),
+	)
+
+	video, err := scanVideo(row)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			current, getErr := r.GetByID(ctx, id)
+			if getErr != nil {
+				return models.Video{}, getErr
+			}
+			if current.Status == models.StatusReady {
+				return current, nil
+			}
+			return models.Video{}, ErrNotClaimable
+		}
+		return models.Video{}, fmt.Errorf("claim video for processing: %w", err)
+	}
+
+	return video, nil
+}
+
+func (r *VideoRepository) RefreshClaim(ctx context.Context, id uuid.UUID, workerID string) error {
+	const query = `
+		UPDATE videos
+		SET claimed_at = NOW(), updated_at = NOW()
+		WHERE id = $1 AND claimed_by = $2 AND status = $3
+	`
+	_, err := r.pool.Exec(ctx, query, id, workerID, models.StatusProcessing)
+	return err
+}
+
 func (r *VideoRepository) MarkProcessing(ctx context.Context, id uuid.UUID) error {
 	const query = `
 		UPDATE videos
@@ -169,7 +233,9 @@ func (r *VideoRepository) MarkReady(
 		    height = $6,
 		    codec = $7,
 		    updated_at = NOW(),
-		    error_message = NULL
+		    error_message = NULL,
+		    claimed_by = NULL,
+		    claimed_at = NULL
 		WHERE id = $1
 	`
 	_, err := r.pool.Exec(ctx, query, id, models.StatusReady, hlsPath, duration, width, height, codec)
@@ -179,7 +245,11 @@ func (r *VideoRepository) MarkReady(
 func (r *VideoRepository) MarkFailed(ctx context.Context, id uuid.UUID, message string) error {
 	const query = `
 		UPDATE videos
-		SET status = $2, error_message = $3, updated_at = NOW()
+		SET status = $2,
+		    error_message = $3,
+		    updated_at = NOW(),
+		    claimed_by = NULL,
+		    claimed_at = NULL
 		WHERE id = $1
 	`
 	_, err := r.pool.Exec(ctx, query, id, models.StatusFailed, message)
@@ -202,6 +272,8 @@ func scanVideo(row scannable) (models.Video, error) {
 		&video.Duration,
 		&video.Width,
 		&video.Height,
+		&video.ClaimedBy,
+		&video.ClaimedAt,
 		&video.CreatedAt,
 		&video.UpdatedAt,
 		&video.ErrorMessage,

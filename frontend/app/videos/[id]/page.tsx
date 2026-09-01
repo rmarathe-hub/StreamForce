@@ -152,6 +152,9 @@ export default function VideoDetailPage() {
           <DetailRow label="Video ID" value={video.id} />
           <DetailRow label="Filename" value={video.filename} />
           <DetailRow label="Status" value={video.status} />
+          {video.claimed_by && (
+            <DetailRow label="Worker" value={video.claimed_by} />
+          )}
           <DetailRow label="Codec" value={video.codec ?? "—"} />
           <DetailRow
             label="Source resolution"
