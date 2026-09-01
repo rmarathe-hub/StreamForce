@@ -139,6 +139,20 @@ export default function VideoDetailPage() {
           <div className="rounded-xl border border-surface-border bg-surface-raised p-6">
             <h2 className="text-lg font-semibold text-white">Processing status</h2>
             <p className="mt-2 text-sm text-zinc-400">{statusMessage(video.status)}</p>
+            {video.status === "PROCESSING" && video.progress_percent != null && (
+              <div className="mt-4 space-y-2">
+                <div className="flex justify-between text-sm text-zinc-400">
+                  <span>Transcoding</span>
+                  <span>{video.progress_percent}%</span>
+                </div>
+                <div className="h-2 overflow-hidden rounded-full bg-zinc-800">
+                  <div
+                    className="h-full rounded-full bg-accent transition-all duration-500"
+                    style={{ width: `${video.progress_percent}%` }}
+                  />
+                </div>
+              </div>
+            )}
             {(video.status === "UPLOADED" || video.status === "QUEUED" || video.status === "PROCESSING") && (
               <p className="mt-4 animate-pulse text-sm text-amber-300">
                 Refreshing automatically every 2 seconds...

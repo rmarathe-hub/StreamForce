@@ -13,6 +13,7 @@ type Config struct {
 	KafkaBrokers      string
 	KafkaTopic        string
 	KafkaConsumerGroup string
+	RedisURL           string
 }
 
 func Load() Config {
@@ -34,6 +35,7 @@ func Load() Config {
 		KafkaBrokers:       getEnv("KAFKA_BROKERS", "localhost:29092"),
 		KafkaTopic:         getEnv("KAFKA_TOPIC", "video.jobs"),
 		KafkaConsumerGroup: getEnv("KAFKA_CONSUMER_GROUP", "streamforge-workers"),
+		RedisURL:           getEnv("REDIS_URL", "redis://localhost:6379/0"),
 	}
 }
 

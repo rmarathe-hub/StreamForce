@@ -18,6 +18,7 @@ import (
 	"github.com/rmarathe-hub/StreamForce/services/api/internal/storage"
 	"github.com/rmarathe-hub/StreamForce/shared/database"
 	"github.com/rmarathe-hub/StreamForce/shared/kafka"
+	"github.com/rmarathe-hub/StreamForce/shared/redis"
 	"github.com/rmarathe-hub/StreamForce/shared/repository"
 )
 
@@ -45,13 +46,21 @@ func main() {
 
 	publisher := kafka.NewJobPublisher(producer)
 
+	redisClient, err := redis.NewClient(cfg.RedisURL)
+	if err != nil {
+		log.Fatalf("redis connection failed: %v", err)
+	}
+	defer redisClient.Close()
+
+	progressStore := redis.NewProgressStore(redisClient)
+
 	store, err := storage.NewLocalStorage(cfg.StoragePath)
 	if err != nil {
 		log.Fatalf("storage init failed: %v", err)
 	}
 
 	repo := repository.NewVideoRepository(pool)
-	h := handlers.New(repo, store, publisher, cfg)
+	h := handlers.New(repo, store, publisher, progressStore, cfg)
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)

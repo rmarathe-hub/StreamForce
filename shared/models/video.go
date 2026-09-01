@@ -23,10 +23,11 @@ type Video struct {
 	Codec        *string    `json:"codec"`
 	Duration     *float64   `json:"duration"`
 	Width        *int       `json:"width"`
-	Height       *int       `json:"height"`
-	ClaimedBy    *string    `json:"claimed_by,omitempty"`
-	ClaimedAt    *time.Time `json:"claimed_at,omitempty"`
-	CreatedAt    time.Time  `json:"created_at"`
-	UpdatedAt    time.Time  `json:"updated_at"`
+	Height          *int       `json:"height"`
+	ClaimedBy       *string    `json:"claimed_by,omitempty"`
+	ClaimedAt       *time.Time `json:"claimed_at,omitempty"`
+	ProgressPercent *int       `json:"progress_percent,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
 	ErrorMessage *string    `json:"error_message"`
 }

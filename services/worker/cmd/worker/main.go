@@ -11,6 +11,7 @@ import (
 	"github.com/rmarathe-hub/StreamForce/shared/database"
 	"github.com/rmarathe-hub/StreamForce/shared/kafka"
 	"github.com/rmarathe-hub/StreamForce/shared/processor"
+	"github.com/rmarathe-hub/StreamForce/shared/redis"
 	"github.com/rmarathe-hub/StreamForce/shared/repository"
 )
 
@@ -28,11 +29,19 @@ func main() {
 
 	repo := repository.NewVideoRepository(pool)
 
+	redisClient, err := redis.NewClient(cfg.RedisURL)
+	if err != nil {
+		log.Fatalf("redis connection failed: %v", err)
+	}
+	defer redisClient.Close()
+
+	progressStore := redis.NewProgressStore(redisClient)
+
 	proc := processor.New(repo, processor.Config{
 		StoragePath: cfg.StoragePath,
 		FFmpegPath:  cfg.FFmpegPath,
 		FFprobePath: cfg.FFprobePath,
-	})
+	}, progressStore)
 
 	brokers := kafka.ParseBrokers(cfg.KafkaBrokers)
 	consumer := kafka.NewConsumer(kafka.Config{

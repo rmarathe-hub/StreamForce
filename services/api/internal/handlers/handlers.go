@@ -22,10 +22,15 @@ type JobPublisher interface {
 	PublishVideoJob(ctx context.Context, videoID uuid.UUID, sourcePath string, attempt int) error
 }
 
+type ProgressReader interface {
+	Get(ctx context.Context, videoID uuid.UUID) (int, bool, error)
+}
+
 type Handler struct {
 	repo      *repository.VideoRepository
 	storage   *storage.LocalStorage
 	publisher JobPublisher
+	progress  ProgressReader
 	cfg       config.Config
 }
 
@@ -33,9 +38,16 @@ func New(
 	repo *repository.VideoRepository,
 	store *storage.LocalStorage,
 	publisher JobPublisher,
+	progress ProgressReader,
 	cfg config.Config,
 ) *Handler {
-	return &Handler{repo: repo, storage: store, publisher: publisher, cfg: cfg}
+	return &Handler{
+		repo:      repo,
+		storage:   store,
+		publisher: publisher,
+		progress:  progress,
+		cfg:       cfg,
+	}
 }
 
 func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
@@ -66,6 +78,17 @@ func (h *Handler) GetVideo(w http.ResponseWriter, r *http.Request) {
 		}
 		writeError(w, http.StatusInternalServerError, "failed to get video")
 		return
+	}
+
+	if video.Status == models.StatusProcessing && h.progress != nil {
+		if percent, found, err := h.progress.Get(r.Context(), id); err == nil {
+			if found {
+				video.ProgressPercent = &percent
+			} else {
+				zero := 0
+				video.ProgressPercent = &zero
+			}
+		}
 	}
 
 	writeJSON(w, http.StatusOK, video)

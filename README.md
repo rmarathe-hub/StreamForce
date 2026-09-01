@@ -11,6 +11,7 @@ Upload videos via the API, queue transcoding jobs in Kafka, process them in a se
 - **Worker:** Go, Kafka consumer, FFmpeg, ffprobe
 - **Database:** PostgreSQL 16
 - **Messaging:** Apache Kafka (KRaft, local Docker)
+- **Cache:** Redis 7 (live transcoding progress)
 - **Storage:** Local filesystem (`storage/uploads/`, `storage/hls/`)
 
 ## Prerequisites
@@ -28,7 +29,7 @@ Upload videos via the API, queue transcoding jobs in Kafka, process them in a se
 docker compose up -d
 ```
 
-Starts PostgreSQL (`15433`) and Kafka (`29092`).
+Starts PostgreSQL (`15433`), Kafka (`29092`), and Redis (`6379`).
 
 ### 2. Start the API
 
@@ -60,7 +61,7 @@ cd frontend
 npm run dev
 ```
 
-Open `http://localhost:3000`, upload an MP4, and watch status move `QUEUED` → `PROCESSING` → `READY`.
+Open `http://localhost:3000`, upload an MP4, and watch status move `QUEUED` → `PROCESSING` → `READY` with a live progress bar during transcoding.
 
 ## Architecture
 
@@ -73,10 +74,11 @@ Go API  →  save upload + QUEUED in Postgres
 Kafka topic: video.jobs
    ↓
 Go Worker  →  consume job  →  FFmpeg  →  HLS files
+           →  publish progress % to Redis
    ↓
-PostgreSQL + shared storage
+PostgreSQL + Redis + shared storage
    ↑
-Go API serves /media/*
+Go API serves /media/* and reads progress from Redis
 ```
 
 **Phase 4 demo:** stop the worker, upload videos (they stay `QUEUED` in Kafka), then start the worker and watch them process.
@@ -104,6 +106,12 @@ Each worker gets a distinct `WORKER_ID` (`worker-1`, `worker-2`, …). Upload se
 
 Jobs are claimed atomically in Postgres (`claimed_by`, `claimed_at`) so two workers never process the same video. If a worker dies mid-transcode, the claim expires after 10 minutes and another worker can reclaim the job.
 
+## Live progress (Phase 6)
+
+While a video is `PROCESSING`, the worker publishes transcoding progress (0–100%) to Redis. The API enriches `GET /api/videos/{id}` with `progress_percent`, and the frontend shows a live progress bar (polled every 2 seconds).
+
+Redis key format: `streamforge:video:{video_id}:progress` (TTL 24h, deleted when processing completes).
+
 ## Processing flow
 
 ```
@@ -128,17 +136,18 @@ Upload → QUEUED → (Kafka) → PROCESSING → FFmpeg/ffprobe → READY
 | `GET` | `/health` | Health check |
 | `GET` | `/api/videos` | List all videos |
 | `POST` | `/api/videos` | Upload video |
-| `GET` | `/api/videos/{id}` | Get video by ID |
+| `GET` | `/api/videos/{id}` | Get video by ID (includes `progress_percent` when processing) |
 | `GET` | `/media/*` | Serve uploads and HLS output |
 
 ## Environment variables
 
-### Shared Kafka settings
+### Shared infrastructure
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `KAFKA_BROKERS` | `localhost:29092` | Comma-separated broker list |
 | `KAFKA_TOPIC` | `video.jobs` | Video processing topic |
+| `REDIS_URL` | `redis://localhost:6379/0` | Redis connection URL |
 
 ### API (`services/api`)
 
@@ -172,7 +181,7 @@ Upload → QUEUED → (Kafka) → PROCESSING → FFmpeg/ffprobe → READY
 ```
 streamforge/
 ├── frontend/
-├── shared/             # models, repository, processor, kafka
+├── shared/             # models, repository, processor, kafka, redis
 ├── services/
 │   ├── api/            # HTTP API + Kafka producer
 │   └── worker/         # Kafka consumer + FFmpeg
@@ -183,5 +192,5 @@ streamforge/
 
 ## Next steps
 
-- Redis progress, WebSockets
+- WebSockets for real-time status (replace polling)
 - Docker Compose for full app stack, Kubernetes, k6 benchmarks

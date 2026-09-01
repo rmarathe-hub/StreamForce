@@ -13,6 +13,7 @@ type Config struct {
 	MigrationsPath string
 	KafkaBrokers   string
 	KafkaTopic     string
+	RedisURL       string
 }
 
 func Load() Config {
@@ -36,6 +37,7 @@ func Load() Config {
 		MigrationsPath: migrationsPath,
 		KafkaBrokers:   getEnv("KAFKA_BROKERS", "localhost:29092"),
 		KafkaTopic:     getEnv("KAFKA_TOPIC", "video.jobs"),
+		RedisURL:       getEnv("REDIS_URL", "redis://localhost:6379/0"),
 	}
 }
 

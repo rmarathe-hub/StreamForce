@@ -1,6 +1,7 @@
 package processor
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -10,21 +11,33 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/rmarathe-hub/StreamForce/shared/models"
 	"github.com/rmarathe-hub/StreamForce/shared/repository"
 )
 
+const (
+	progressSetupEnd     = 5
+	progressTranscodeEnd = 95
+	progressFinalize     = 98
+)
+
 type Processor struct {
-	repo    *repository.VideoRepository
-	cfg     Config
-	baseDir string
+	repo     *repository.VideoRepository
+	cfg      Config
+	baseDir  string
+	progress ProgressReporter
 }
 
-func New(repo *repository.VideoRepository, cfg Config) *Processor {
+func New(repo *repository.VideoRepository, cfg Config, progress ProgressReporter) *Processor {
+	if progress == nil {
+		progress = NoopProgressReporter()
+	}
 	return &Processor{
-		repo:    repo,
-		cfg:     cfg,
-		baseDir: cfg.StoragePath,
+		repo:     repo,
+		cfg:      cfg,
+		baseDir:  cfg.StoragePath,
+		progress: progress,
 	}
 }
 
@@ -37,19 +50,27 @@ func (p *Processor) Process(ctx context.Context, video models.Video) error {
 		return fmt.Errorf("video %s is not processing", video.ID)
 	}
 
+	tracker := newProgressTracker(ctx, p.progress, video.ID)
+	tracker.report(0)
+
 	sourcePath := filepath.Join(p.baseDir, video.SourcePath)
 	meta, err := probeVideo(ctx, p.cfg.FFprobePath, sourcePath)
 	if err != nil {
+		tracker.clear()
 		_ = p.repo.MarkFailed(ctx, video.ID, err.Error())
 		return err
 	}
 
+	tracker.report(progressSetupEnd)
+
 	outputDir := filepath.Join(p.baseDir, "hls", video.ID.String())
 	if err := os.RemoveAll(outputDir); err != nil {
+		tracker.clear()
 		_ = p.repo.MarkFailed(ctx, video.ID, "failed to prepare output directory")
 		return err
 	}
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+		tracker.clear()
 		_ = p.repo.MarkFailed(ctx, video.ID, "failed to create output directory")
 		return err
 	}
@@ -57,15 +78,28 @@ func (p *Processor) Process(ctx context.Context, video models.Video) error {
 	heights := targetHeights(meta.Height)
 	variants := make([]variantInfo, 0, len(heights))
 
-	for _, height := range heights {
+	for index, height := range heights {
 		label := fmt.Sprintf("%dp", height)
 		variantDir := filepath.Join(outputDir, label)
 		if err := os.MkdirAll(variantDir, 0o755); err != nil {
+			tracker.clear()
 			_ = p.repo.MarkFailed(ctx, video.ID, "failed to create variant directory")
 			return err
 		}
 
-		if err := transcodeVariant(ctx, p.cfg.FFmpegPath, sourcePath, variantDir, height); err != nil {
+		variantIndex := index
+		if err := transcodeVariant(
+			ctx,
+			p.cfg.FFmpegPath,
+			sourcePath,
+			variantDir,
+			height,
+			meta.Duration,
+			func(variantPercent int) {
+				tracker.report(overallProgress(variantIndex, len(heights), variantPercent))
+			},
+		); err != nil {
+			tracker.clear()
 			_ = p.repo.MarkFailed(ctx, video.ID, err.Error())
 			return err
 		}
@@ -78,18 +112,69 @@ func (p *Processor) Process(ctx context.Context, video models.Video) error {
 		})
 	}
 
+	tracker.report(progressFinalize)
+
 	masterPath := filepath.Join(outputDir, "master.m3u8")
 	if err := writeMasterPlaylist(masterPath, variants); err != nil {
+		tracker.clear()
 		_ = p.repo.MarkFailed(ctx, video.ID, "failed to write master playlist")
 		return err
 	}
 
 	relativeHLSPath := filepath.ToSlash(filepath.Join("hls", video.ID.String(), "master.m3u8"))
 	if err := p.repo.MarkReady(ctx, video.ID, relativeHLSPath, meta.Duration, meta.Width, meta.Height, meta.Codec); err != nil {
+		tracker.clear()
 		return fmt.Errorf("mark ready: %w", err)
 	}
 
+	tracker.report(100)
+	tracker.clear()
 	return nil
+}
+
+type progressTracker struct {
+	ctx      context.Context
+	reporter ProgressReporter
+	videoID  uuid.UUID
+	lastPct  int
+}
+
+func newProgressTracker(ctx context.Context, reporter ProgressReporter, videoID uuid.UUID) *progressTracker {
+	return &progressTracker{ctx: ctx, reporter: reporter, videoID: videoID, lastPct: -1}
+}
+
+func (t *progressTracker) report(percent int) {
+	if percent < 0 {
+		percent = 0
+	}
+	if percent > 100 {
+		percent = 100
+	}
+	if percent <= t.lastPct && percent < 100 {
+		return
+	}
+	t.lastPct = percent
+	_ = t.reporter.Set(t.ctx, t.videoID, percent)
+}
+
+func (t *progressTracker) clear() {
+	_ = t.reporter.Delete(t.ctx, t.videoID)
+}
+
+func overallProgress(variantIndex, variantCount, variantPercent int) int {
+	if variantCount <= 0 {
+		return progressSetupEnd
+	}
+
+	transcodeRange := progressTranscodeEnd - progressSetupEnd
+	weight := float64(transcodeRange) / float64(variantCount)
+	base := progressSetupEnd + int(float64(variantIndex)*weight)
+	add := int(float64(variantPercent) * weight / 100)
+	total := base + add
+	if total > progressTranscodeEnd {
+		return progressTranscodeEnd
+	}
+	return total
 }
 
 type probeResult struct {
@@ -200,7 +285,13 @@ func bandwidthForHeight(height int) int {
 	}
 }
 
-func transcodeVariant(ctx context.Context, ffmpegPath, inputPath, outputDir string, height int) error {
+func transcodeVariant(
+	ctx context.Context,
+	ffmpegPath, inputPath, outputDir string,
+	height int,
+	duration float64,
+	onProgress func(int),
+) error {
 	segmentPattern := filepath.Join(outputDir, "segment_%03d.ts")
 	playlistPath := filepath.Join(outputDir, "index.m3u8")
 
@@ -217,15 +308,71 @@ func transcodeVariant(ctx context.Context, ffmpegPath, inputPath, outputDir stri
 		"-hls_time", "4",
 		"-hls_playlist_type", "vod",
 		"-hls_segment_filename", segmentPattern,
-		playlistPath,
 	}
+
+	if onProgress != nil {
+		args = append(args, "-progress", "pipe:1", "-nostats")
+	}
+
+	args = append(args, playlistPath)
 
 	cmd := exec.CommandContext(ctx, ffmpegPath, args...)
 	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
+
+	if onProgress == nil || duration <= 0 {
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("ffmpeg failed for %dp: %w", height, err)
+		}
+		return nil
+	}
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("ffmpeg stdout pipe for %dp: %w", height, err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("ffmpeg start for %dp: %w", height, err)
+	}
+
+	scanner := bufio.NewScanner(stdout)
+	lastReported := -1
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "out_time_ms=") {
+			continue
+		}
+
+		value := strings.TrimPrefix(line, "out_time_ms=")
+		if value == "N/A" {
+			continue
+		}
+
+		micros, err := strconv.ParseInt(value, 10, 64)
+		if err != nil {
+			continue
+		}
+
+		percent := int(float64(micros) / (duration * 1_000_000) * 100)
+		if percent > 100 {
+			percent = 100
+		}
+		if percent > lastReported {
+			lastReported = percent
+			onProgress(percent)
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		_ = cmd.Process.Kill()
+		return fmt.Errorf("read ffmpeg progress for %dp: %w", height, err)
+	}
+
+	if err := cmd.Wait(); err != nil {
 		return fmt.Errorf("ffmpeg failed for %dp: %w", height, err)
 	}
 
+	onProgress(100)
 	return nil
 }
 
