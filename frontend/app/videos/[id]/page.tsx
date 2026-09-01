@@ -24,9 +24,9 @@ function DetailRow({ label, value }: { label: string; value: string }) {
 function statusMessage(status: Video["status"]): string {
   switch (status) {
     case "UPLOADED":
-      return "Upload complete. Transcoding will start shortly.";
+      return "Upload complete. Waiting for a worker to pick up this job.";
     case "PROCESSING":
-      return "FFmpeg is generating adaptive HLS renditions.";
+      return "A background worker is generating adaptive HLS renditions.";
     case "READY":
       return "Adaptive HLS stream is ready to play.";
     case "FAILED":

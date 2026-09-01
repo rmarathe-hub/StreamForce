@@ -1,0 +1,50 @@
+package main
+
+import (
+	"context"
+	"log"
+	"os"
+	"os/signal"
+	"syscall"
+
+	"github.com/rmarathe-hub/StreamForce/services/worker/internal/config"
+	"github.com/rmarathe-hub/StreamForce/shared/database"
+	"github.com/rmarathe-hub/StreamForce/shared/processor"
+	"github.com/rmarathe-hub/StreamForce/shared/repository"
+)
+
+func main() {
+	cfg := config.Load()
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	pool, err := database.Connect(ctx, cfg.DatabaseURL)
+	if err != nil {
+		log.Fatalf("database connection failed: %v", err)
+	}
+	defer pool.Close()
+
+	repo := repository.NewVideoRepository(pool)
+
+	reset, err := repo.ResetInterruptedProcessing(ctx)
+	if err != nil {
+		log.Fatalf("reset interrupted processing jobs failed: %v", err)
+	}
+	if reset > 0 {
+		log.Printf(`{"worker_id":"%s","event":"recovered_interrupted_jobs","count":%d}`, cfg.WorkerID, reset)
+	}
+
+	proc := processor.New(repo, processor.Config{
+		StoragePath: cfg.StoragePath,
+		FFmpegPath:  cfg.FFmpegPath,
+		FFprobePath: cfg.FFprobePath,
+	})
+
+	runner := processor.NewRunner(repo, proc, cfg.WorkerID, cfg.PollInterval)
+	if err := runner.Run(ctx); err != nil && err != context.Canceled {
+		log.Fatalf("worker failed: %v", err)
+	}
+
+	os.Exit(0)
+}

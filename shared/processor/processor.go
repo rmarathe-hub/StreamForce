@@ -4,26 +4,23 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 
-	"github.com/google/uuid"
-	"github.com/rmarathe-hub/StreamForce/services/api/internal/config"
-	"github.com/rmarathe-hub/StreamForce/services/api/internal/models"
-	"github.com/rmarathe-hub/StreamForce/services/api/internal/repository"
+	"github.com/rmarathe-hub/StreamForce/shared/models"
+	"github.com/rmarathe-hub/StreamForce/shared/repository"
 )
 
 type Processor struct {
 	repo    *repository.VideoRepository
-	cfg     config.Config
+	cfg     Config
 	baseDir string
 }
 
-func New(repo *repository.VideoRepository, cfg config.Config) *Processor {
+func New(repo *repository.VideoRepository, cfg Config) *Processor {
 	return &Processor{
 		repo:    repo,
 		cfg:     cfg,
@@ -31,56 +28,25 @@ func New(repo *repository.VideoRepository, cfg config.Config) *Processor {
 	}
 }
 
-func (p *Processor) Enqueue(videoID uuid.UUID) {
-	go func() {
-		if err := p.Process(context.Background(), videoID); err != nil {
-			log.Printf("video %s processing failed: %v", videoID, err)
-		}
-	}()
-}
-
-func (p *Processor) RecoverPending(ctx context.Context) error {
-	videos, err := p.repo.ListByStatus(ctx, models.StatusUploaded)
-	if err != nil {
-		return err
-	}
-
-	for _, video := range videos {
-		log.Printf("recovering pending video %s", video.ID)
-		p.Enqueue(video.ID)
-	}
-
-	return nil
-}
-
-func (p *Processor) Process(ctx context.Context, videoID uuid.UUID) error {
-	video, err := p.repo.GetByID(ctx, videoID)
-	if err != nil {
-		return err
-	}
-
-	if video.Status != models.StatusUploaded && video.Status != models.StatusFailed {
-		return nil
-	}
-
-	if err := p.repo.MarkProcessing(ctx, videoID); err != nil {
-		return fmt.Errorf("mark processing: %w", err)
+func (p *Processor) Process(ctx context.Context, video models.Video) error {
+	if video.Status != models.StatusProcessing {
+		return fmt.Errorf("video %s is not processing", video.ID)
 	}
 
 	sourcePath := filepath.Join(p.baseDir, video.SourcePath)
 	meta, err := probeVideo(ctx, p.cfg.FFprobePath, sourcePath)
 	if err != nil {
-		_ = p.repo.MarkFailed(ctx, videoID, err.Error())
+		_ = p.repo.MarkFailed(ctx, video.ID, err.Error())
 		return err
 	}
 
-	outputDir := filepath.Join(p.baseDir, "hls", videoID.String())
+	outputDir := filepath.Join(p.baseDir, "hls", video.ID.String())
 	if err := os.RemoveAll(outputDir); err != nil {
-		_ = p.repo.MarkFailed(ctx, videoID, "failed to prepare output directory")
+		_ = p.repo.MarkFailed(ctx, video.ID, "failed to prepare output directory")
 		return err
 	}
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
-		_ = p.repo.MarkFailed(ctx, videoID, "failed to create output directory")
+		_ = p.repo.MarkFailed(ctx, video.ID, "failed to create output directory")
 		return err
 	}
 
@@ -91,12 +57,12 @@ func (p *Processor) Process(ctx context.Context, videoID uuid.UUID) error {
 		label := fmt.Sprintf("%dp", height)
 		variantDir := filepath.Join(outputDir, label)
 		if err := os.MkdirAll(variantDir, 0o755); err != nil {
-			_ = p.repo.MarkFailed(ctx, videoID, "failed to create variant directory")
+			_ = p.repo.MarkFailed(ctx, video.ID, "failed to create variant directory")
 			return err
 		}
 
 		if err := transcodeVariant(ctx, p.cfg.FFmpegPath, sourcePath, variantDir, height); err != nil {
-			_ = p.repo.MarkFailed(ctx, videoID, err.Error())
+			_ = p.repo.MarkFailed(ctx, video.ID, err.Error())
 			return err
 		}
 
@@ -110,16 +76,15 @@ func (p *Processor) Process(ctx context.Context, videoID uuid.UUID) error {
 
 	masterPath := filepath.Join(outputDir, "master.m3u8")
 	if err := writeMasterPlaylist(masterPath, variants); err != nil {
-		_ = p.repo.MarkFailed(ctx, videoID, "failed to write master playlist")
+		_ = p.repo.MarkFailed(ctx, video.ID, "failed to write master playlist")
 		return err
 	}
 
-	relativeHLSPath := filepath.ToSlash(filepath.Join("hls", videoID.String(), "master.m3u8"))
-	if err := p.repo.MarkReady(ctx, videoID, relativeHLSPath, meta.Duration, meta.Width, meta.Height, meta.Codec); err != nil {
+	relativeHLSPath := filepath.ToSlash(filepath.Join("hls", video.ID.String(), "master.m3u8"))
+	if err := p.repo.MarkReady(ctx, video.ID, relativeHLSPath, meta.Duration, meta.Width, meta.Height, meta.Codec); err != nil {
 		return fmt.Errorf("mark ready: %w", err)
 	}
 
-	log.Printf("video %s ready at %s", videoID, relativeHLSPath)
 	return nil
 }
 
@@ -200,10 +165,10 @@ func targetHeights(sourceHeight int) []int {
 }
 
 type variantInfo struct {
-	Label      string
-	Width      int
-	Height     int
-	Bandwidth  int
+	Label     string
+	Width     int
+	Height    int
+	Bandwidth int
 }
 
 func scaledWidth(sourceWidth, sourceHeight, targetHeight int) int {

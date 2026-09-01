@@ -14,11 +14,10 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 	"github.com/rmarathe-hub/StreamForce/services/api/internal/config"
-	"github.com/rmarathe-hub/StreamForce/services/api/internal/database"
 	"github.com/rmarathe-hub/StreamForce/services/api/internal/handlers"
-	"github.com/rmarathe-hub/StreamForce/services/api/internal/processor"
-	"github.com/rmarathe-hub/StreamForce/services/api/internal/repository"
 	"github.com/rmarathe-hub/StreamForce/services/api/internal/storage"
+	"github.com/rmarathe-hub/StreamForce/shared/database"
+	"github.com/rmarathe-hub/StreamForce/shared/repository"
 )
 
 func main() {
@@ -41,12 +40,7 @@ func main() {
 	}
 
 	repo := repository.NewVideoRepository(pool)
-	proc := processor.New(repo, cfg)
-	if err := proc.RecoverPending(ctx); err != nil {
-		log.Printf("pending video recovery failed: %v", err)
-	}
-
-	h := handlers.New(repo, store, proc, cfg)
+	h := handlers.New(repo, store, cfg)
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)

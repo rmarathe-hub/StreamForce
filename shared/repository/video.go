@@ -2,12 +2,18 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/rmarathe-hub/StreamForce/services/api/internal/models"
+	"github.com/rmarathe-hub/StreamForce/shared/models"
+)
+
+var (
+	ErrNotFound = fmt.Errorf("video not found")
+	ErrNoJob    = errors.New("no uploaded videos to process")
 )
 
 type VideoRepository struct {
@@ -81,44 +87,59 @@ func (r *VideoRepository) GetByID(ctx context.Context, id uuid.UUID) (models.Vid
 	return video, nil
 }
 
-func (r *VideoRepository) ListByStatus(ctx context.Context, status string) ([]models.Video, error) {
-	const query = `
+func (r *VideoRepository) ClaimNextUploaded(ctx context.Context) (models.Video, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return models.Video{}, fmt.Errorf("begin claim transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	const selectQuery = `
 		SELECT ` + videoColumns + `
 		FROM videos
 		WHERE status = $1
 		ORDER BY created_at ASC
+		LIMIT 1
+		FOR UPDATE SKIP LOCKED
 	`
 
-	rows, err := r.pool.Query(ctx, query, status)
+	row := tx.QueryRow(ctx, selectQuery, models.StatusUploaded)
+	video, err := scanVideo(row)
 	if err != nil {
-		return nil, fmt.Errorf("list videos by status: %w", err)
-	}
-	defer rows.Close()
-
-	var videos []models.Video
-	for rows.Next() {
-		video, err := scanVideo(rows)
-		if err != nil {
-			return nil, err
+		if err == pgx.ErrNoRows {
+			return models.Video{}, ErrNoJob
 		}
-		videos = append(videos, video)
+		return models.Video{}, fmt.Errorf("claim uploaded video: %w", err)
 	}
 
-	if videos == nil {
-		videos = []models.Video{}
-	}
-
-	return videos, rows.Err()
-}
-
-func (r *VideoRepository) MarkProcessing(ctx context.Context, id uuid.UUID) error {
-	const query = `
+	const updateQuery = `
 		UPDATE videos
 		SET status = $2, updated_at = NOW(), error_message = NULL
 		WHERE id = $1
 	`
-	_, err := r.pool.Exec(ctx, query, id, models.StatusProcessing)
-	return err
+	if _, err := tx.Exec(ctx, updateQuery, video.ID, models.StatusProcessing); err != nil {
+		return models.Video{}, fmt.Errorf("mark claimed video processing: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return models.Video{}, fmt.Errorf("commit claim transaction: %w", err)
+	}
+
+	video.Status = models.StatusProcessing
+	return video, nil
+}
+
+func (r *VideoRepository) ResetInterruptedProcessing(ctx context.Context) (int64, error) {
+	const query = `
+		UPDATE videos
+		SET status = $1, updated_at = NOW()
+		WHERE status = $2
+	`
+	tag, err := r.pool.Exec(ctx, query, models.StatusUploaded, models.StatusProcessing)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }
 
 func (r *VideoRepository) MarkReady(
@@ -154,8 +175,6 @@ func (r *VideoRepository) MarkFailed(ctx context.Context, id uuid.UUID, message 
 	_, err := r.pool.Exec(ctx, query, id, models.StatusFailed, message)
 	return err
 }
-
-var ErrNotFound = fmt.Errorf("video not found")
 
 type scannable interface {
 	Scan(dest ...any) error
