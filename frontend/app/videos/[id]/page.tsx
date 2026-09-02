@@ -4,12 +4,14 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { HLSPlayer } from "@/components/hls-player";
+import { VideoThumbnail } from "@/components/video-thumbnail";
 import {
   availableResolutions,
   getVideo,
   playbackUrl,
   type Video,
 } from "@/lib/api";
+import { mergeVideoEvent, subscribeVideoUpdates } from "@/lib/ws";
 import { StatusBadge, formatDate } from "@/components/status-badge";
 
 function DetailRow({ label, value }: { label: string; value: string }) {
@@ -43,10 +45,11 @@ export default function VideoDetailPage() {
   const [video, setVideo] = useState<Video | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [live, setLive] = useState(false);
 
   useEffect(() => {
     let active = true;
-    let interval: ReturnType<typeof setInterval> | undefined;
+    let unsubscribe: (() => void) | undefined;
 
     async function load() {
       try {
@@ -55,19 +58,21 @@ export default function VideoDetailPage() {
         setVideo(data);
         setError(null);
 
-        if (data.status === "UPLOADED" || data.status === "QUEUED" || data.status === "PROCESSING") {
-          interval = setInterval(async () => {
-            try {
-              const updated = await getVideo(params.id);
+        if (data.status !== "READY" && data.status !== "FAILED") {
+          unsubscribe = subscribeVideoUpdates(
+            params.id,
+            (event) => {
               if (!active) return;
-              setVideo(updated);
-              if (updated.status === "READY" || updated.status === "FAILED") {
-                clearInterval(interval);
+              setVideo((current) => (current ? mergeVideoEvent(current, event) : current));
+              if (event.status === "READY" || event.status === "FAILED") {
+                unsubscribe?.();
+                setLive(false);
               }
-            } catch {
-              // keep polling on transient errors
-            }
-          }, 2000);
+            },
+            (connected) => {
+              if (active) setLive(connected);
+            },
+          );
         }
       } catch (err) {
         if (active) {
@@ -82,7 +87,7 @@ export default function VideoDetailPage() {
 
     return () => {
       active = false;
-      if (interval) clearInterval(interval);
+      unsubscribe?.();
     };
   }, [params.id]);
 
@@ -105,6 +110,8 @@ export default function VideoDetailPage() {
 
   const streamUrl = playbackUrl(video);
   const resolutions = availableResolutions(video);
+  const isInProgress =
+    video.status === "UPLOADED" || video.status === "QUEUED" || video.status === "PROCESSING";
 
   return (
     <section className="space-y-6">
@@ -127,13 +134,7 @@ export default function VideoDetailPage() {
               <HLSPlayer src={streamUrl} />
             </div>
           ) : (
-            <div className="flex aspect-video items-center justify-center rounded-xl border border-dashed border-surface-border bg-surface-raised">
-              <p className="text-sm text-zinc-400">
-                {video.status === "QUEUED" || video.status === "PROCESSING" || video.status === "UPLOADED"
-                  ? "Preparing HLS stream..."
-                  : "Playback unavailable"}
-              </p>
-            </div>
+            <VideoThumbnail video={video} className="rounded-xl" />
           )}
 
           <div className="rounded-xl border border-surface-border bg-surface-raised p-6">
@@ -153,9 +154,12 @@ export default function VideoDetailPage() {
                 </div>
               </div>
             )}
-            {(video.status === "UPLOADED" || video.status === "QUEUED" || video.status === "PROCESSING") && (
-              <p className="mt-4 animate-pulse text-sm text-amber-300">
-                Refreshing automatically every 2 seconds...
+            {isInProgress && (
+              <p className="mt-4 flex items-center gap-2 text-sm text-emerald-300">
+                <span
+                  className={`inline-block h-2 w-2 rounded-full ${live ? "bg-emerald-400" : "bg-zinc-500"}`}
+                />
+                {live ? "Live updates via WebSocket" : "Connecting to live updates..."}
               </p>
             )}
           </div>

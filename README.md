@@ -108,9 +108,25 @@ Jobs are claimed atomically in Postgres (`claimed_by`, `claimed_at`) so two work
 
 ## Live progress (Phase 6)
 
-While a video is `PROCESSING`, the worker publishes transcoding progress (0–100%) to Redis. The API enriches `GET /api/videos/{id}` with `progress_percent`, and the frontend shows a live progress bar (polled every 2 seconds).
+While a video is `PROCESSING`, the worker publishes transcoding progress (0–100%) to Redis. The API enriches `GET /api/videos/{id}` with `progress_percent`, and the frontend shows a live progress bar.
 
 Redis key format: `streamforge:video:{video_id}:progress` (TTL 24h, deleted when processing completes).
+
+## Real-time updates (Phase 7)
+
+Status and progress changes are published to Redis pub/sub (`streamforge:video:events`). The API forwards them over WebSocket:
+
+```
+ws://localhost:8081/api/ws/videos/{id}
+```
+
+The video detail page connects on load and receives live updates (no polling). Workers publish events on claim, progress, and completion; the API publishes on upload (`QUEUED`).
+
+## Portfolio UI (Phase 8)
+
+- **Thumbnails** — FFmpeg extracts a poster frame during transcoding (`storage/thumbnails/{id}.jpg`)
+- **Video cards** — grid layout with thumbnails, status badges, and duration on the library page
+- **System stats** — `GET /api/stats` returns video counts by status and active workers; shown on the home page
 
 ## Processing flow
 
@@ -134,9 +150,11 @@ Upload → QUEUED → (Kafka) → PROCESSING → FFmpeg/ffprobe → READY
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/health` | Health check |
+| `GET` | `/api/stats` | System stats (counts by status, active workers) |
 | `GET` | `/api/videos` | List all videos |
 | `POST` | `/api/videos` | Upload video |
 | `GET` | `/api/videos/{id}` | Get video by ID (includes `progress_percent` when processing) |
+| `GET` | `/api/ws/videos/{id}` | WebSocket stream of status/progress updates |
 | `GET` | `/media/*` | Serve uploads and HLS output |
 
 ## Environment variables
@@ -192,5 +210,4 @@ streamforge/
 
 ## Next steps
 
-- WebSockets for real-time status (replace polling)
 - Docker Compose for full app stack, Kubernetes, k6 benchmarks

@@ -27,7 +27,7 @@ func NewVideoRepository(pool *pgxpool.Pool) *VideoRepository {
 }
 
 const videoColumns = `
-	id, filename, status, source_path, hls_path, codec,
+	id, filename, status, source_path, hls_path, thumbnail_path, codec,
 	duration, width, height, claimed_by, claimed_at,
 	created_at, updated_at, error_message
 `
@@ -220,6 +220,7 @@ func (r *VideoRepository) MarkReady(
 	ctx context.Context,
 	id uuid.UUID,
 	hlsPath string,
+	thumbnailPath string,
 	duration float64,
 	width, height int,
 	codec string,
@@ -228,17 +229,29 @@ func (r *VideoRepository) MarkReady(
 		UPDATE videos
 		SET status = $2,
 		    hls_path = $3,
-		    duration = $4,
-		    width = $5,
-		    height = $6,
-		    codec = $7,
+		    thumbnail_path = $4,
+		    duration = $5,
+		    width = $6,
+		    height = $7,
+		    codec = $8,
 		    updated_at = NOW(),
 		    error_message = NULL,
 		    claimed_by = NULL,
 		    claimed_at = NULL
 		WHERE id = $1
 	`
-	_, err := r.pool.Exec(ctx, query, id, models.StatusReady, hlsPath, duration, width, height, codec)
+	_, err := r.pool.Exec(
+		ctx,
+		query,
+		id,
+		models.StatusReady,
+		hlsPath,
+		thumbnailPath,
+		duration,
+		width,
+		height,
+		codec,
+	)
 	return err
 }
 
@@ -256,6 +269,72 @@ func (r *VideoRepository) MarkFailed(ctx context.Context, id uuid.UUID, message 
 	return err
 }
 
+func (r *VideoRepository) GetStats(ctx context.Context) (models.SystemStats, error) {
+	const statusQuery = `
+		SELECT status, COUNT(*)
+		FROM videos
+		GROUP BY status
+	`
+
+	rows, err := r.pool.Query(ctx, statusQuery)
+	if err != nil {
+		return models.SystemStats{}, fmt.Errorf("query status counts: %w", err)
+	}
+	defer rows.Close()
+
+	stats := models.SystemStats{
+		ByStatus:      make(map[string]int),
+		ActiveWorkers: []string{},
+	}
+
+	for rows.Next() {
+		var status string
+		var count int
+		if err := rows.Scan(&status, &count); err != nil {
+			return models.SystemStats{}, err
+		}
+		stats.ByStatus[status] = count
+		stats.TotalVideos += count
+
+		switch status {
+		case models.StatusProcessing:
+			stats.ProcessingCount = count
+		case models.StatusQueued, models.StatusUploaded:
+			stats.QueuedCount += count
+		case models.StatusReady:
+			stats.ReadyCount = count
+		case models.StatusFailed:
+			stats.FailedCount = count
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return models.SystemStats{}, err
+	}
+
+	const workersQuery = `
+		SELECT DISTINCT claimed_by
+		FROM videos
+		WHERE status = $1 AND claimed_by IS NOT NULL
+		ORDER BY claimed_by
+	`
+
+	workerRows, err := r.pool.Query(ctx, workersQuery, models.StatusProcessing)
+	if err != nil {
+		return models.SystemStats{}, fmt.Errorf("query active workers: %w", err)
+	}
+	defer workerRows.Close()
+
+	for workerRows.Next() {
+		var worker string
+		if err := workerRows.Scan(&worker); err != nil {
+			return models.SystemStats{}, err
+		}
+		stats.ActiveWorkers = append(stats.ActiveWorkers, worker)
+	}
+
+	return stats, workerRows.Err()
+}
+
 type scannable interface {
 	Scan(dest ...any) error
 }
@@ -268,6 +347,7 @@ func scanVideo(row scannable) (models.Video, error) {
 		&video.Status,
 		&video.SourcePath,
 		&video.HLSPath,
+		&video.ThumbnailPath,
 		&video.Codec,
 		&video.Duration,
 		&video.Width,

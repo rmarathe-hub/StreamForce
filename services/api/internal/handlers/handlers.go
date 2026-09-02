@@ -14,7 +14,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/rmarathe-hub/StreamForce/services/api/internal/config"
 	"github.com/rmarathe-hub/StreamForce/services/api/internal/storage"
+	"github.com/rmarathe-hub/StreamForce/services/api/internal/ws"
 	"github.com/rmarathe-hub/StreamForce/shared/models"
+	"github.com/rmarathe-hub/StreamForce/shared/redis"
 	"github.com/rmarathe-hub/StreamForce/shared/repository"
 )
 
@@ -26,11 +28,17 @@ type ProgressReader interface {
 	Get(ctx context.Context, videoID uuid.UUID) (int, bool, error)
 }
 
+type VideoEventPublisher interface {
+	Publish(ctx context.Context, event redis.VideoEvent) error
+}
+
 type Handler struct {
 	repo      *repository.VideoRepository
 	storage   *storage.LocalStorage
 	publisher JobPublisher
 	progress  ProgressReader
+	events    VideoEventPublisher
+	hub       *ws.Hub
 	cfg       config.Config
 }
 
@@ -39,6 +47,8 @@ func New(
 	store *storage.LocalStorage,
 	publisher JobPublisher,
 	progress ProgressReader,
+	events VideoEventPublisher,
+	hub *ws.Hub,
 	cfg config.Config,
 ) *Handler {
 	return &Handler{
@@ -46,6 +56,8 @@ func New(
 		storage:   store,
 		publisher: publisher,
 		progress:  progress,
+		events:    events,
+		hub:       hub,
 		cfg:       cfg,
 	}
 }
@@ -61,6 +73,15 @@ func (h *Handler) ListVideos(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, videos)
+}
+
+func (h *Handler) GetStats(w http.ResponseWriter, r *http.Request) {
+	stats, err := h.repo.GetStats(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to get stats")
+		return
+	}
+	writeJSON(w, http.StatusOK, stats)
 }
 
 func (h *Handler) GetVideo(w http.ResponseWriter, r *http.Request) {
@@ -140,6 +161,10 @@ func (h *Handler) CreateVideo(w http.ResponseWriter, r *http.Request) {
 		_ = h.repo.MarkFailed(r.Context(), video.ID, "failed to publish kafka job: "+err.Error())
 		writeError(w, http.StatusInternalServerError, "failed to queue video for processing")
 		return
+	}
+
+	if h.events != nil {
+		_ = h.events.Publish(r.Context(), redis.VideoEventFromModel(video, nil))
 	}
 
 	writeJSON(w, http.StatusCreated, video)

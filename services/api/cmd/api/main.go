@@ -16,6 +16,7 @@ import (
 	"github.com/rmarathe-hub/StreamForce/services/api/internal/config"
 	"github.com/rmarathe-hub/StreamForce/services/api/internal/handlers"
 	"github.com/rmarathe-hub/StreamForce/services/api/internal/storage"
+	"github.com/rmarathe-hub/StreamForce/services/api/internal/ws"
 	"github.com/rmarathe-hub/StreamForce/shared/database"
 	"github.com/rmarathe-hub/StreamForce/shared/kafka"
 	"github.com/rmarathe-hub/StreamForce/shared/redis"
@@ -25,7 +26,9 @@ import (
 func main() {
 	cfg := config.Load()
 
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	pool, err := database.Connect(ctx, cfg.DatabaseURL)
 	if err != nil {
 		log.Fatalf("database connection failed: %v", err)
@@ -53,6 +56,9 @@ func main() {
 	defer redisClient.Close()
 
 	progressStore := redis.NewProgressStore(redisClient)
+	eventPublisher := redis.NewEventPublisher(redisClient)
+	hub := ws.NewHub()
+	go hub.RunRedisSubscriber(ctx, redisClient)
 
 	store, err := storage.NewLocalStorage(cfg.StoragePath)
 	if err != nil {
@@ -60,14 +66,13 @@ func main() {
 	}
 
 	repo := repository.NewVideoRepository(pool)
-	h := handlers.New(repo, store, publisher, progressStore, cfg)
+	h := handlers.New(repo, store, publisher, progressStore, eventPublisher, hub, cfg)
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
-	r.Use(middleware.Timeout(120 * time.Second))
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"http://localhost:3000"},
 		AllowedMethods:   []string{"GET", "POST", "OPTIONS"},
@@ -77,12 +82,19 @@ func main() {
 	}))
 
 	r.Get("/health", h.Health)
+	r.Get("/api/ws/videos/{id}", h.VideoWebSocket)
 	r.Handle("/media/*", mediaHandler(cfg.StoragePath))
-	r.Route("/api", func(r chi.Router) {
-		r.Get("/videos", h.ListVideos)
-		r.Post("/videos", h.CreateVideo)
-		r.Get("/videos/{id}", h.GetVideo)
+
+	r.Group(func(r chi.Router) {
+		r.Use(middleware.Timeout(120 * time.Second))
+		r.Route("/api", func(r chi.Router) {
+			r.Get("/stats", h.GetStats)
+			r.Get("/videos", h.ListVideos)
+			r.Post("/videos", h.CreateVideo)
+			r.Get("/videos/{id}", h.GetVideo)
+		})
 	})
+
 	r.NotFound(h.NotFound)
 
 	server := &http.Server{
@@ -104,8 +116,10 @@ func main() {
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	<-stop
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	cancel()
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
 
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Fatalf("server shutdown failed: %v", err)

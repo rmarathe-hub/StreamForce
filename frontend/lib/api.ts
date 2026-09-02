@@ -15,6 +15,17 @@ export interface Video {
   created_at: string;
   updated_at: string;
   error_message: string | null;
+  thumbnail_path?: string | null;
+}
+
+export interface SystemStats {
+  total_videos: number;
+  by_status: Record<string, number>;
+  processing_count: number;
+  queued_count: number;
+  ready_count: number;
+  failed_count: number;
+  active_workers: string[];
 }
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8081";
@@ -40,6 +51,15 @@ export function listVideos(): Promise<Video[]> {
 
 export function getVideo(id: string): Promise<Video> {
   return request<Video>(`/api/videos/${id}`);
+}
+
+export function getStats(): Promise<SystemStats> {
+  return request<SystemStats>("/api/stats");
+}
+
+export function thumbnailUrl(video: Video): string | null {
+  if (!video.thumbnail_path) return null;
+  return `${API_BASE}/media/${video.thumbnail_path}`;
 }
 
 export function playbackUrl(video: Video): string | null {

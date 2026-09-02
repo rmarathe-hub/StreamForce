@@ -63,6 +63,13 @@ func (p *Processor) Process(ctx context.Context, video models.Video) error {
 
 	tracker.report(progressSetupEnd)
 
+	thumbnailPath, err := p.generateThumbnail(ctx, sourcePath, video.ID, meta.Duration)
+	if err != nil {
+		tracker.clear()
+		_ = p.repo.MarkFailed(ctx, video.ID, err.Error())
+		return err
+	}
+
 	outputDir := filepath.Join(p.baseDir, "hls", video.ID.String())
 	if err := os.RemoveAll(outputDir); err != nil {
 		tracker.clear()
@@ -122,7 +129,16 @@ func (p *Processor) Process(ctx context.Context, video models.Video) error {
 	}
 
 	relativeHLSPath := filepath.ToSlash(filepath.Join("hls", video.ID.String(), "master.m3u8"))
-	if err := p.repo.MarkReady(ctx, video.ID, relativeHLSPath, meta.Duration, meta.Width, meta.Height, meta.Codec); err != nil {
+	if err := p.repo.MarkReady(
+		ctx,
+		video.ID,
+		relativeHLSPath,
+		thumbnailPath,
+		meta.Duration,
+		meta.Width,
+		meta.Height,
+		meta.Codec,
+	); err != nil {
 		tracker.clear()
 		return fmt.Errorf("mark ready: %w", err)
 	}
@@ -392,4 +408,40 @@ func writeMasterPlaylist(path string, variants []variantInfo) error {
 	}
 
 	return os.WriteFile(path, []byte(builder.String()), 0o644)
+}
+
+func (p *Processor) generateThumbnail(
+	ctx context.Context,
+	sourcePath string,
+	videoID uuid.UUID,
+	duration float64,
+) (string, error) {
+	thumbDir := filepath.Join(p.baseDir, "thumbnails")
+	if err := os.MkdirAll(thumbDir, 0o755); err != nil {
+		return "", fmt.Errorf("create thumbnail directory: %w", err)
+	}
+
+	outputPath := filepath.Join(thumbDir, videoID.String()+".jpg")
+	seek := 1.0
+	if duration > 0 && duration < seek {
+		seek = duration / 2
+	}
+
+	args := []string{
+		"-y",
+		"-ss", fmt.Sprintf("%.2f", seek),
+		"-i", sourcePath,
+		"-frames:v", "1",
+		"-vf", "scale=640:-2",
+		"-q:v", "3",
+		outputPath,
+	}
+
+	cmd := exec.CommandContext(ctx, p.cfg.FFmpegPath, args...)
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("generate thumbnail: %w", err)
+	}
+
+	return filepath.ToSlash(filepath.Join("thumbnails", videoID.String()+".jpg")), nil
 }

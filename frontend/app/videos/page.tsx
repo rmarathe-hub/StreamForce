@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { listVideos, type Video } from "@/lib/api";
-import { StatusBadge, formatDate } from "@/components/status-badge";
+import { VideoCard, VideoCardSkeleton } from "@/components/video-card";
 
 export default function VideosPage() {
   const [videos, setVideos] = useState<Video[]>([]);
@@ -38,7 +38,7 @@ export default function VideosPage() {
         <div>
           <h1 className="text-3xl font-bold text-white">Videos</h1>
           <p className="mt-2 text-zinc-400">
-            Uploaded videos persist across refreshes.
+            {loading ? "Loading library..." : `${videos.length} video${videos.length === 1 ? "" : "s"} in your library`}
           </p>
         </div>
         <Link
@@ -49,11 +49,18 @@ export default function VideosPage() {
         </Link>
       </div>
 
-      {loading && <p className="text-zinc-400">Loading videos...</p>}
       {error && (
         <p className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
           {error}
         </p>
+      )}
+
+      {loading && (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <VideoCardSkeleton key={i} />
+          ))}
+        </div>
       )}
 
       {!loading && !error && videos.length === 0 && (
@@ -66,40 +73,10 @@ export default function VideosPage() {
       )}
 
       {!loading && videos.length > 0 && (
-        <div className="overflow-hidden rounded-xl border border-surface-border">
-          <table className="min-w-full divide-y divide-surface-border text-sm">
-            <thead className="bg-surface-raised text-left text-zinc-400">
-              <tr>
-                <th className="px-4 py-3 font-medium">Filename</th>
-                <th className="px-4 py-3 font-medium">Status</th>
-                <th className="px-4 py-3 font-medium">Duration</th>
-                <th className="px-4 py-3 font-medium">Created</th>
-                <th className="px-4 py-3 font-medium" />
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-surface-border bg-surface/40">
-              {videos.map((video) => (
-                <tr key={video.id} className="hover:bg-surface-raised/60">
-                  <td className="px-4 py-3 font-medium text-white">{video.filename}</td>
-                  <td className="px-4 py-3">
-                    <StatusBadge status={video.status} />
-                  </td>
-                  <td className="px-4 py-3 text-zinc-400">
-                    {video.duration ? `${video.duration.toFixed(1)}s` : "—"}
-                  </td>
-                  <td className="px-4 py-3 text-zinc-400">{formatDate(video.created_at)}</td>
-                  <td className="px-4 py-3 text-right">
-                    <Link
-                      href={`/videos/${video.id}`}
-                      className="text-accent transition hover:text-white"
-                    >
-                      Details
-                    </Link>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {videos.map((video) => (
+            <VideoCard key={video.id} video={video} />
+          ))}
         </div>
       )}
     </section>
